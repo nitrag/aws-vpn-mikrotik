@@ -29,6 +29,9 @@ then
   exit 1
 fi
 
+VPN_CONNECTION_ID=$(grep 'Your\ VPN\ Connection\ ID.*:' $1 | sed 's/.*: \(.*\)$/\1/')
+read -a VPN_CONNECTION_ID <<< $VPN_CONNECTION_ID
+
 AWS_ADDRESSES_TO_USE=$(grep --color -A2 'Address' $1 | sed 's/.*:\ \(.*\)$/\1/' | grep '^[0-9].*$' | sed 's/^\(.*\)\/.*$/\1/')
 read -a AWS_ADDRESSES_TO_USE <<< $AWS_ADDRESSES_TO_USE
 
@@ -138,31 +141,33 @@ then
 fi
 cat >$CONFIG_FILE_PATH <<EOF
 /ip addr
-  add address=$AWS_TUNNEL1_INSIDE_CUSTOMER_GATEWAY_ADDR/30 interface=$PUBLIC_INTERFACE
-  add address=$AWS_TUNNEL2_INSIDE_CUSTOMER_GATEWAY_ADDR/30 interface=$PUBLIC_INTERFACE
+  add address=$AWS_TUNNEL1_INSIDE_CUSTOMER_GATEWAY_ADDR/30 interface=$PUBLIC_INTERFACE comment="awsvpc1-$VPN_CONNECTION_ID"
+  add address=$AWS_TUNNEL2_INSIDE_CUSTOMER_GATEWAY_ADDR/30 interface=$PUBLIC_INTERFACE comment="awsvpc2-$VPN_CONNECTION_ID"
 
 /ip ipsec proposal
-  add auth-algorithms=sha1 comment="AWS PROPOSAL" enc-algorithms=aes-128-cbc lifetime=1h name=aws pfs-group=modp1024
+  add auth-algorithms=sha1 comment="AWS PROPOSAL" enc-algorithms=aes-128-cbc lifetime=01:00:00 name=aws pfs-group=modp1024
 
 /ip ipsec policy
-  add src-address=0.0.0.0/0  src-port=any dst-address=$VPC_NET dst-port=any  protocol=all action=encrypt level=require   ipsec-protocols=esp  tunnel=yes sa-src-address=$CUSTOMER_PUBLIC_ADDR sa-dst-address=$AWS_TUNNEL1_PUBLIC_ADDR  proposal=aws priority=0
+  add src-address=0.0.0.0/0  src-port=any dst-address=$VPC_NET dst-port=any  protocol=all action=encrypt level=require   ipsec-protocols=esp  tunnel=yes sa-src-address=$CUSTOMER_PUBLIC_ADDR sa-dst-address=$AWS_TUNNEL1_PUBLIC_ADDR  proposal=aws
 
-  add src-address=0.0.0.0/0  src-port=any dst-address=$VPC_NET dst-port=any  protocol=all action=encrypt level=require    ipsec-protocols=esp  tunnel=yes sa-src-address=$CUSTOMER_PUBLIC_ADDR sa-dst-address=$AWS_TUNNEL2_PUBLIC_ADDR proposal=aws priority=0
+  add src-address=0.0.0.0/0  src-port=any dst-address=$VPC_NET dst-port=any  protocol=all action=encrypt level=require    ipsec-protocols=esp  tunnel=yes sa-src-address=$CUSTOMER_PUBLIC_ADDR sa-dst-address=$AWS_TUNNEL2_PUBLIC_ADDR proposal=aws
 
-  add src-address=0.0.0.0/0  src-port=any dst-address=$AWS_TUNNEL1_INSIDE_VIRTUAL_GATEWAY_ADDR/32 dst-port=any protocol=all action=encrypt level=require ipsec-protocols=esp  tunnel=yes sa-src-address=$CUSTOMER_PUBLIC_ADDR sa-dst-address=$AWS_TUNNEL1_PUBLIC_ADDR  proposal=aws priority=0
+  add src-address=0.0.0.0/0  src-port=any dst-address=$AWS_TUNNEL1_INSIDE_VIRTUAL_GATEWAY_ADDR/32 dst-port=any protocol=all action=encrypt level=require ipsec-protocols=esp  tunnel=yes sa-src-address=$CUSTOMER_PUBLIC_ADDR sa-dst-address=$AWS_TUNNEL1_PUBLIC_ADDR  proposal=aws
 
-  add src-address=0.0.0.0/0  src-port=any dst-address=$AWS_TUNNEL2_INSIDE_VIRTUAL_GATEWAY_ADDR/32 dst-port=any  protocol=all action=encrypt level=require ipsec-protocols=esp  tunnel=yes sa-src-address=$CUSTOMER_PUBLIC_ADDR sa-dst-address=$AWS_TUNNEL2_PUBLIC_ADDR  proposal=aws priority=0
+  add src-address=0.0.0.0/0  src-port=any dst-address=$AWS_TUNNEL2_INSIDE_VIRTUAL_GATEWAY_ADDR/32 dst-port=any  protocol=all action=encrypt level=require ipsec-protocols=esp  tunnel=yes sa-src-address=$CUSTOMER_PUBLIC_ADDR sa-dst-address=$AWS_TUNNEL2_PUBLIC_ADDR  proposal=aws
+
+/ip ipsec profile
+  add name="aws" hash-algorithm=sha1 enc-algorithm=aes-128 dh-group=modp1024 lifetime=8h proposal-check=obey nat-traversal=yes dpd-interval=10s dpd-maximum-failures=3
 
 /ip ipsec peer
-     add address=$AWS_TUNNEL1_PUBLIC_ADDR/32 local-address=$CUSTOMER_PUBLIC_ADDR passive=no port=500 auth-method=pre-shared-key \
-     secret=$AWS_TUNNEL1_SHARED_SECRET generate-policy=no exchange-mode=main send-initial-contact=yes nat-traversal=no \
-     proposal-check=obey hash-algorithm=sha1 enc-algorithm=aes-128 dh-group=modp1024 lifetime=8h lifebytes=0 dpd-interval=10s \
-     dpd-maximum-failures=3
+  add name=awsvpc1-$VPN_CONNECTION_ID address=$AWS_TUNNEL1_PUBLIC_ADDR/32 local-address=$CUSTOMER_PUBLIC_ADDR profile=aws passive=no port=500 exchange-mode=main send-initial-contact=yes 
 
-     add address=$AWS_TUNNEL2_PUBLIC_ADDR/32 local-address=$CUSTOMER_PUBLIC_ADDR passive=no port=500 auth-method=pre-shared-key \
-     secret=$AWS_TUNNEL2_SHARED_SECRET generate-policy=no exchange-mode=main send-initial-contact=yes nat-traversal=no \
-     proposal-check=obey hash-algorithm=sha1 enc-algorithm=aes-128 dh-group=modp1024 lifetime=8h lifebytes=0 dpd-interval=10s \
-     dpd-maximum-failures=3
+  add name=awsvpc2-$VPN_CONNECTION_ID address=$AWS_TUNNEL2_PUBLIC_ADDR/32 local-address=$CUSTOMER_PUBLIC_ADDR profile=aws passive=no port=500 exchange-mode=main send-initial-contact=yes
+
+/ip ipsec identity
+  add peer=aws1-$VPN_CONNECTION_ID auth-method=pre-shared-key secret="$AWS_TUNNEL1_SHARED_SECRET" generate-policy=no 
+  
+  add peer=aws2-$VPN_CONNECTION_ID auth-method=pre-shared-key secret="$AWS_TUNNEL2_SHARED_SECRET" generate-policy=no  
 
 /ip firewall filter
   add chain=input action=accept protocol=ipsec-esp src-address=$AWS_TUNNEL1_PUBLIC_ADDR dst-address=$CUSTOMER_PUBLIC_ADDR in-interface=$PUBLIC_INTERFACE \
@@ -189,7 +194,6 @@ cat >$CONFIG_FILE_PATH <<EOF
   add chain=srcnat action=src-nat to-addresses=$LOCAL_NET dst-address=$VPC_NET place-before=0
   add chain=dstnat action=accept src-address=$VPC_NET in-interface=$PUBLIC_INTERFACE place-before=0
 
-
 /routing bgp instance
   set default disabled=yes
   add as=$AWS_TUNNEL1_CUSTOMER_ASN client-to-client-reflection=no name=vgw-1 redistribute-static=yes router-id=$AWS_TUNNEL1_INSIDE_CUSTOMER_GATEWAY_ADDR
@@ -199,6 +203,6 @@ cat >$CONFIG_FILE_PATH <<EOF
   add network=$LOCAL_NET
 
 /routing bgp peer
-  add hold-time=30s instance=vgw-1 name=awsvpc1 remote-address=$AWS_TUNNEL1_INSIDE_VIRTUAL_GATEWAY_ADDR remote-as=$AWS_TUNNEL1_VIRTUAL_GATEWAY_ASN route-reflect=yes ttl=default update-source=$AWS_TUNNEL1_INSIDE_CUSTOMER_GATEWAY_ADDR
-  add hold-time=30s instance=vgw-2 name=awsvpc2 remote-address=$AWS_TUNNEL2_INSIDE_VIRTUAL_GATEWAY_ADDR remote-as=$AWS_TUNNEL2_VIRTUAL_GATEWAY_ASN route-reflect=yes ttl=default update-source=$AWS_TUNNEL2_INSIDE_CUSTOMER_GATEWAY_ADDR
+  add hold-time=30s instance=vgw-1 name=awsvpc1-$VPN_CONNECTION_ID remote-address=$AWS_TUNNEL1_INSIDE_VIRTUAL_GATEWAY_ADDR remote-as=$AWS_TUNNEL1_VIRTUAL_GATEWAY_ASN route-reflect=yes ttl=default update-source=$AWS_TUNNEL1_INSIDE_CUSTOMER_GATEWAY_ADDR
+  add hold-time=30s instance=vgw-2 name=awsvpc2-$VPN_CONNECTION_ID remote-address=$AWS_TUNNEL2_INSIDE_VIRTUAL_GATEWAY_ADDR remote-as=$AWS_TUNNEL2_VIRTUAL_GATEWAY_ASN route-reflect=yes ttl=default update-source=$AWS_TUNNEL2_INSIDE_CUSTOMER_GATEWAY_ADDR
 EOF
