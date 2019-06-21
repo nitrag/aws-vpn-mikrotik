@@ -165,9 +165,9 @@ cat >$CONFIG_FILE_PATH <<EOF
   add name=awsvpc2-$VPN_CONNECTION_ID address=$AWS_TUNNEL2_PUBLIC_ADDR/32 local-address=$CUSTOMER_PUBLIC_ADDR profile=aws passive=no port=500 exchange-mode=main send-initial-contact=yes
 
 /ip ipsec identity
-  add peer=aws1-$VPN_CONNECTION_ID auth-method=pre-shared-key secret="$AWS_TUNNEL1_SHARED_SECRET" generate-policy=no 
+  add peer=awsvpc1-$VPN_CONNECTION_ID auth-method=pre-shared-key secret="$AWS_TUNNEL1_SHARED_SECRET" generate-policy=no 
   
-  add peer=aws2-$VPN_CONNECTION_ID auth-method=pre-shared-key secret="$AWS_TUNNEL2_SHARED_SECRET" generate-policy=no  
+  add peer=awsvpc2-$VPN_CONNECTION_ID auth-method=pre-shared-key secret="$AWS_TUNNEL2_SHARED_SECRET" generate-policy=no  
 
 /ip firewall filter
   add chain=input action=accept protocol=ipsec-esp src-address=$AWS_TUNNEL1_PUBLIC_ADDR dst-address=$CUSTOMER_PUBLIC_ADDR in-interface=$PUBLIC_INTERFACE \
